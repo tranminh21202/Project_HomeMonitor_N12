@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Sensor Dashboard</title>
+ 
+  <style type="text/css">
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background-color: #f4f4f4;
+    }
+
+    .sensor-container {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-around;
+      margin-top: 50px;
+    }
+
+    .sensor {
+      border: 1px solid #ccc;
+      padding: 20px;
+      width: 300px; /* Adjusted width for better visualization */
+      margin: 10px;
+      border-radius: 10px;
+      background-color: #f0f7ff;
+    }
+
+    .alert {
+      color: red;
+      font-weight: bold;
+    }
+
+    canvas {
+      margin-top: 20px;
+      z-index: 2;
+    }
+   	button {
+      display: inline-block;
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+      border: none;
+      border-radius: 5px;
+      position: relative;
+      overflow: hidden;
+      background-color: #4CAF50; 
+    }
+
+    div {
+      position: relative;
+      z-index: 2;
+    }
+
+    button:hover {
+      background-color: #45a049; 
+    }
+
+
+    #controlLed {
+      color: white; 
+    }
+
+    #controlBuz {
+      color: white; 
+    }
+    
+  </style>
+
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.1/sockjs.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@10"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="./raphael.min.js"></script>
+  <script src="./justgage.min.js"></script>
+</head>
+<body>
+
+  <h1>Sensor Dashboard</h1>
+
+  <div class="sensor-container">
+  	
+    <div class="sensor" id="temperatureSensor">
+      <h2>Nhiệt độ</h2>
+      <div id="temperatureGauge"></div>
+      <canvas id="temperatureChart" width="400" height="200"></canvas>
+      <div class="alert" id="temperatureAlert"></div>
+    </div>
+    <div class="sensor" id="humiditySensor">
+      <h2>Độ ẩm</h2>
+      <div id="humidityGauge"></div>
+      <canvas id="humidityChart" width="400" height="200"></canvas>
+    </div>
+    <div class="sensor" id="gasSensor">
+      <h2>Khí gas</h2>
+      <div id="gasGauge"></div>
+      <canvas id="gasChart" width="400" height="200"></canvas>
+      <div class="alert" id="gasAlert"></div>
+    </div>
+    <div class="sensor" id="pressureSensor">
+      <h2>Áp suất</h2>
+      <div id="pressureGauge"></div>
+      <canvas id="pressureChart" width="400" height="200"></canvas>
+      <div class="alert" id="pressureAlert"></div>
+    </div>
+  </div>
+	<button id="controlLed" onclick="toggleLed()">Bật Led</button>
+	<button id="controlBuz" onclick="toggleBuz()">Bật Còi</button>
+	
+  <script>
+    let temperatureValue;
+    let humidityValue;
+    let gasValue;
+    let pressureValue;
+	let smokeValue;
+	
+	var ledMode = false;
+	var buzMode = false;
+	
+    const temperatureThreshold = 25;
+    const gasThreshold = 1900;
+    const pressureThreshold = 1500;
+    const smokeThreshold = 0;
+
+    let temperatureHistory = [];
+    let humidityHistory = [];
+    let gasHistory = [];
+    let pressureHistory = [];
+
+    const historyLength = 10;
+
+    var stompClient = null;
+    
+    function toggleLed() {
+    	var ledControl = document.getElementById("controlLed")
+    	let msg = ""
+    	let html = ""
+    	ledMode = !ledMode
+    	if (ledMode) {
+    		msg = "on"
+    		html = "Tắt Led"
+    	} else {
+    		msg = "off"
+    		html = "Bật Led"
+    	}
+    	ledControl.innerHTML = html;
+        stompClient.send("/app/control/led", {}, msg);
+    }
+    function toggleBuz() {
+    	var ledControl = document.getElementById("controlBuz")
+    	let msg = ""
+    	let html = ""
+    	buzMode = !buzMode
+    	if (buzMode) {
+    		msg = "on"
+    		html = "Tắt Còi"
+    	} else {
+    		msg = "off"
+    		html = "Bật Còi"
+    	}
+    	ledControl.innerHTML = html;
+        stompClient.send("/app/control/buz", {}, msg);
+    }
+    
+    function checkSmoke() {
+        if (smokeValue  == 0) {
+          Swal.fire({
+            icon: 'error',
+            text: `Có khói`
+          });
+        }
+      }
+    
+    var temperatureGauge = new JustGage({
+      id: "temperatureGauge",
+      value: 0,
+      min: 0,
+      max: 100,
+      title: "Temperature",
+      label: "°C",
+      levelColors: ["#00ff00", "#ffff00", "#ff0000"]
+    });
+
+    var humidityGauge = new JustGage({
+      id: "humidityGauge",
+      value: 0,
+      min: 0,
+      max: 100,
+      title: "Humidity",
+      label: "%",
+      levelColors: ["#ff0000", "#ffff00", "#00ff00"]
+    });
+
+    var gasGauge = new JustGage({
+      id: "gasGauge",
+      value: 0,
+      min: 0,
+      max: 3000,
+      title: "Gas Level",
+      label: "ppm",
+      levelColors: ["#00ff00", "#ffff00", "#ff0000"]
+    });
+
+    var pressureGauge = new JustGage({
+      id: "pressureGauge",
+      value: 0,
+      min: 0,
+      max: 2000,
+      title: "Pressure Level",
+      label: "pa",
+      levelColors: ["#00ff00", "#ffff00", "#ff0000"]
+    });
+    
+    function checkAndShowAlert(sensorName, sensorValue, threshold, alertMessage) {
+  	  const alertElement = document.getElementById(`${sensorName}Alert`);
+  	  
+  	  if (sensorValue > threshold) {
+  	    alertElement.innerHTML = `${alertMessage} cao hơn ${threshold}.`;
+  	    alertElement.style.display = 'block'; 
+  	  } else {
+  	    alertElement.innerHTML = ' ';
+  	    alertElement.style.display = 'none';
+  	  	}
+  	  }
+    
+    function updateGauges(sensorName) {
+      switch (sensorName) {
+        case 'temperature':
+          temperatureGauge.refresh(temperatureValue);
+          checkAndShowAlert('temperature', temperatureValue, temperatureThreshold, 'Nhiệt độ cao');
+          break;
+        case 'humidity':
+          humidityGauge.refresh(humidityValue);
+          break;
+        case 'gas':
+          gasGauge.refresh(gasValue);
+          checkAndShowAlert('gas', gasValue, gasThreshold, 'Khí gas cao');
+          break;
+        case 'pressure':
+          pressureGauge.refresh(pressureValue);
+          checkAndShowAlert('pressure', pressureValue, pressureThreshold, 'Áp suất cao')
+          break;
+        default:
+          break;
+      }
+    }
+    
+    function updateHistory(historyArray, value) {
+        if (historyArray.length >= historyLength) {
+          historyArray.shift();
+        }
+        historyArray.push(value);
+      }
+    
+    function updateChart(chartId, data, title, yAxisLabel) {
+    	  var ctx = document.getElementById(chartId).getContext('2d');
+    	  if (window[chartId + "Chart"]) {
+    	    window[chartId + "Chart"].destroy();
+    	  }
+    	  window[chartId + "Chart"] = new Chart(ctx, {
+    	    type: 'line',
+    	    data: {
+    	      labels: Array.from({ length: data.length }, (_, i) => i + 1),
+    	      datasets: [{
+    	        label: title,
+    	        data: data,
+    	        borderColor: 'rgba(75, 192, 192, 1)',
+    	        borderWidth: 1,
+    	        fill: false,
+    	      }]
+    	    },
+    	    options: {
+    	      scales: {
+    	        x: [{
+    	          type: 'linear',
+    	          position: 'bottom'
+    	        }],
+    	        y: [{
+    	          type: 'linear',
+    	          ticks: {
+    	            beginAtZero: true
+    	          },
+    	          scaleLabel: {
+    	            display: true,
+    	            labelString: yAxisLabel
+    	          }
+    	        }]
+    	      }
+    	    }
+    	  });
+    	}
+    
+    function updateCharts() {
+        updateChart('temperatureChart', temperatureHistory, 'Temperature History', '°C');
+        updateChart('humidityChart', humidityHistory, 'Humidity History', '%');
+        updateChart('gasChart', gasHistory, 'Gas Level History', 'ppm');
+        updateChart('pressureChart', pressureHistory, 'Pressure History', 'pa');
+      }
+    
+    
+    function processCommand(sensorName, data) {
+        switch (sensorName) {
+          case 'temperature':
+            temperatureValue = data;
+            updateHistory(temperatureHistory, temperatureValue);
+            break;
+          case 'humidity':
+            humidityValue = data;
+            updateHistory(humidityHistory, humidityValue);
+            break;
+          case 'gas':
+            gasValue = data;
+            updateHistory(gasHistory, gasValue);
+            break;
+          case 'pressure':
+            pressureValue = data;
+            updateHistory(pressureHistory, pressureValue);
+            break;
+          case 'smoke':
+              smokeValue = data;
+              break;
+          default:
+            break;
+        }
+
+        updateGauges(sensorName);
+      }
+    
+    function connect() {
+    	console.log('Trying to connect to WebSocket...');
+        var socket = new SockJS('/ws');
+        stompClient = Stomp.over(socket);
+        stompClient.connect({}, function(frame) {
+            console.log('Connected: ' + frame);
+            stompClient.subscribe('/topic/prj/temp', function(message) {
+                processCommand('temperature', JSON.parse(message.body));
+                updateCharts();
+            });
+            stompClient.subscribe('/topic/prj/hum', function(message) {
+                processCommand('humidity', JSON.parse(message.body));
+                updateCharts();
+            });
+            stompClient.subscribe('/topic/prj/gas', function(message) {
+                processCommand('gas', JSON.parse(message.body));
+                updateCharts();
+            });
+            stompClient.subscribe('/topic/prj/pre', function(message) {
+                processCommand('pressure', JSON.parse(message.body));
+                updateCharts();
+            });
+            stompClient.subscribe('/topic/prj/smoke', function(message) {
+                processCommand('smoke', JSON.parse(message.body));
+                checkSmoke();
+            });
+        });
+    }
+    
+    window.onload = function (event) {
+        connect();
+    }
+  </script>
+</body>
+</html>
